@@ -107,8 +107,9 @@ def render_brief_llm(gate_id: str, action: ProposedAction, verdict: PolicyVerdic
 def _merge(template: Brief, fill: LlmFill) -> Brief:
     legal = {c.id for c in template.choices}
     rec_id = fill.recommended_choice_id if fill.recommended_choice_id in legal else None
-    merged = template.model_copy(
-        update={
+    payload = template.model_dump()
+    payload.update(
+        {
             "proposed": fill.proposed,
             "tradeoffs": fill.tradeoffs,
             "recommendation": fill.recommendation,
@@ -116,6 +117,7 @@ def _merge(template: Brief, fill: LlmFill) -> Brief:
             "generator": "llm",
         }
     )
+    merged = Brief.model_validate(payload)
     try:
         merged.assert_budget()
     except ValueError:

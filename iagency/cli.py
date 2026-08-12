@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from iagency.ledger import Ledger
-from iagency.loop import brief_for, decide, resume, submit
+from iagency.loop import brief_for, decide, expire_pending, resume, submit
 from iagency.render import resolve_renderer
 from iagency.types import RATIONALE_CODES, HumanIdentity, ProposedAction
 
@@ -36,6 +36,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
 
 def cmd_pending(args: argparse.Namespace) -> int:
     ledger = _ledger(args.db)
+    expire_pending(ledger)
     rows = ledger.pending_gates()
     if not rows:
         print("no pending gates")
@@ -96,11 +97,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     from iagency.web import serve
 
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if args.host not in loopback and not args.allow_remote:
+        print("refusing non-loopback bind; pass --allow-remote to override", file=sys.stderr)
+        return 2
     server = serve(
         args.db,
         host=args.host,
         port=args.port,
         renderer=resolve_renderer(args.brief),
+        require_local_host=not args.allow_remote,
     )
     print(f"iagency web on http://{args.host}:{args.port}  db={args.db}", file=sys.stderr)
     try:
@@ -166,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_brief(s)
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8080)
+    s.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="allow a non-loopback bind; the web channel has no authentication",
+    )
     s.set_defaults(func=cmd_serve)
     return p
 

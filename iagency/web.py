@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import html
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from iagency.brief import render_brief
 from iagency.ledger import Ledger
-from iagency.loop import BriefRenderer, brief_for, decide, resume, submit
+from iagency.loop import BriefRenderer, brief_for, decide, expire_pending, resume, submit
 from iagency.types import RATIONALE_CODES, HumanIdentity, ProposedAction
 
 
@@ -45,7 +45,12 @@ def _page(title: str, body: str) -> bytes:
     return doc.encode("utf-8")
 
 
-def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    db_path: Path,
+    renderer: BriefRenderer,
+    *,
+    require_local_host: bool = True,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:
             return
@@ -66,7 +71,16 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
         def _ledger(self) -> Ledger:
             return Ledger(db_path)
 
+        def _local_client(self) -> bool:
+            if not require_local_host:
+                return True
+            host = (self.headers.get("Host") or "").split(":")[0].strip("[]")
+            return host in {"127.0.0.1", "localhost", "::1"}
+
         def do_GET(self) -> None:  # noqa: N802
+            if not self._local_client():
+                self._send(403, _page("Forbidden", "<p>Localhost only.</p>"))
+                return
             path = urlparse(self.path).path
             if path == "/health":
                 self._send(200, b'{"ok":true}', "application/json")
@@ -82,8 +96,14 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
             self._send(404, _page("Not found", "<p>Not found.</p><p><a href='/'>Home</a></p>"))
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._local_client():
+                self._send(403, _page("Forbidden", "<p>Localhost only.</p>"))
+                return
             path = urlparse(self.path).path
             form = self._form()
+            if form is None:
+                self._send(413, _page("Too large", "<p>Request body is too large.</p>"))
+                return
             if path == "/submit":
                 self._submit(form)
                 return
@@ -93,15 +113,23 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                 return
             self._send(404, _page("Not found", "<p>Not found.</p>"))
 
-        def _form(self) -> dict[str, list[str]]:
-            length = int(self.headers.get("Content-Length", "0") or 0)
+        def _form(self) -> dict[str, list[str]] | None:
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                return None
+            if length < 0 or length > 256 * 1024:
+                return None
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             return parse_qs(raw, keep_blank_values=True)
 
         def _index(self) -> None:
             ledger = self._ledger()
-            rows = ledger.pending_gates()
-            ledger.close()
+            try:
+                expire_pending(ledger)
+                rows = ledger.pending_gates()
+            finally:
+                ledger.close()
             items = "<p class='meta'>No pending gates.</p>"
             if rows:
                 lis = "".join(
@@ -130,13 +158,13 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                 brief = brief_for(ledger, gate_id)
                 token = resume(ledger, gate_id)
             except KeyError:
-                ledger.close()
                 self._send(
                     404,
                     _page("Unknown gate", "<p>Unknown gate.</p><p><a href='/'>Home</a></p>"),
                 )
                 return
-            ledger.close()
+            finally:
+                ledger.close()
             if token.status != "pending":
                 body = (
                     f"<h1>Gate {html.escape(gate_id)}</h1>"
@@ -159,19 +187,11 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                 f"{html.escape(code)}</label></div>"
                 for code in sorted(RATIONALE_CODES)
             )
-            rec = ""
-            if brief.recommendation or brief.recommended_choice_id:
-                rec = (
-                    f"<p><strong>Suggested:</strong> "
-                    f"{html.escape(brief.recommended_choice_id or '—')} "
-                    f"— {html.escape(brief.recommendation or '')}</p>"
-                )
             body = f"""
 <p><a href="/">Home</a></p>
 <h1>Gate {html.escape(gate_id)}</h1>
 <p class="meta">generator={html.escape(brief.generator)}</p>
 <pre>{html.escape(brief.render())}</pre>
-{rec}
 <form method="post" action="/gates/{html.escape(gate_id)}/decide">
   <label>Choice</label>
   {choices}
@@ -206,8 +226,10 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                 )
                 return
             ledger = self._ledger()
-            token = submit(ledger, action, renderer=renderer)
-            ledger.close()
+            try:
+                token = submit(ledger, action, renderer=renderer)
+            finally:
+                ledger.close()
             if token.status == "pending" and token.gate_id:
                 self.send_response(303)
                 self.send_header("Location", f"/gates/{token.gate_id}")
@@ -240,7 +262,6 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                     actor=HumanIdentity(id=who, display_name=who, channel="web"),
                 )
             except (ValueError, KeyError, TimeoutError) as e:
-                ledger.close()
                 self._send(
                     400,
                     _page(
@@ -249,7 +270,8 @@ def make_handler(db_path: Path, renderer: BriefRenderer) -> type[BaseHTTPRequest
                     ),
                 )
                 return
-            ledger.close()
+            finally:
+                ledger.close()
             body = (
                 f"<h1>Recorded</h1><pre>{html.escape(token.model_dump_json(indent=2))}</pre>"
                 f"<p><a href='/'>Home</a></p>"
@@ -265,6 +287,11 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8080,
     renderer: BriefRenderer | None = None,
-) -> ThreadingHTTPServer:
-    handler = make_handler(db_path, renderer or render_brief)
-    return ThreadingHTTPServer((host, port), handler)
+    require_local_host: bool = True,
+) -> HTTPServer:
+    handler = make_handler(
+        db_path,
+        renderer or render_brief,
+        require_local_host=require_local_host,
+    )
+    return HTTPServer((host, port), handler)

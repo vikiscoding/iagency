@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "0.2.0"
 MAX_PARAMS_BYTES = 8 * 1024
@@ -138,6 +138,15 @@ class Brief(BaseModel):
     deeper_refs: list[str] = Field(default_factory=list, max_length=5)
     generator: Literal["template", "llm"] = "template"
     schema_version: str = SCHEMA_VERSION
+
+    @model_validator(mode="after")
+    def recommended_choice_must_exist(self) -> Brief:
+        if self.recommended_choice_id is None:
+            return self
+        legal = {c.id for c in self.choices}
+        if self.recommended_choice_id not in legal:
+            self.recommended_choice_id = None
+        return self
 
     def render(self) -> str:
         lines = [

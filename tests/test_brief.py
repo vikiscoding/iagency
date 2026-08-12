@@ -53,3 +53,12 @@ def test_same_inputs_same_brief() -> None:
     a = render_brief("g", action, v)
     b = render_brief("g", action, v)
     assert a.model_dump() == b.model_dump()
+
+
+def test_brief_drops_illegal_recommended_choice() -> None:
+    action = _prod_transfer()
+    brief = render_brief("g", action, evaluate(action))
+    dumped = brief.model_dump()
+    dumped["recommended_choice_id"] = "not-a-choice"
+    dirty = brief.__class__.model_validate(dumped)
+    assert dirty.recommended_choice_id is None

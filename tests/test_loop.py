@@ -4,7 +4,7 @@ import pytest
 
 from iagency.brief import render_brief
 from iagency.ledger import Ledger
-from iagency.loop import decide, resume, submit
+from iagency.loop import decide, expire_pending, resume, submit
 from iagency.types import Actor, HumanIdentity, Money, ProposedAction
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
@@ -86,7 +86,9 @@ def test_full_human_loop_approve(tmp_path) -> None:
 def test_override_of_recommendation_is_recorded(tmp_path) -> None:
     def renderer(gate_id, action, verdict):
         brief = render_brief(gate_id, action, verdict)
-        return brief.model_copy(update={"recommended_choice_id": "approve"})
+        payload = brief.model_dump()
+        payload["recommended_choice_id"] = "approve"
+        return brief.__class__.model_validate(payload)
 
     ledger = Ledger(tmp_path / "l.sqlite")
     pending = submit(
@@ -192,4 +194,15 @@ def test_double_decide_rejected(tmp_path) -> None:
             actor=_human(),
             clock=_clock(NOW + timedelta(seconds=3)),
         )
+    ledger.close()
+
+
+def test_expire_pending_sweeps_due_gates(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "l.sqlite")
+    pending = submit(ledger, _action(environment="prod"), clock=_clock(NOW))
+    swept = expire_pending(ledger, clock=_clock(NOW + timedelta(hours=2)))
+    assert len(swept) == 1
+    assert swept[0].status == "expired"
+    assert ledger.gate_status(pending.gate_id) == "expired"
+    assert ledger.pending_gates() == []
     ledger.close()

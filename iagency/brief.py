@@ -1,8 +1,4 @@
-"""Layer B — predicament brief template.
-
-The template is the fallback and the source of choices / reason codes.
-A model may only fill proposed, tradeoffs, and recommendation via brief_llm.
-"""
+"""Layer B template. Owns choices and reason codes. Fallback when the compressor fails."""
 
 from __future__ import annotations
 

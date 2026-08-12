@@ -20,6 +20,10 @@ GENESIS_HASH = "0" * 64
 RecordType = Literal["auto_allow", "auto_block", "gate_opened", "decision", "timeout"]
 
 
+class LedgerConflict(ValueError):
+    """A gate closed between read and write. Not a hash-chain failure."""
+
+
 def compute_hash(
     *,
     seq: int,
@@ -45,6 +49,7 @@ class Ledger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.isolation_level = None
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._init()
 
@@ -96,19 +101,19 @@ class Ledger:
     ) -> LedgerRecord:
         if recorded_at.tzinfo is None:
             raise ValueError("recorded_at must be timezone-aware")
-        seq = self.last_seq() + 1
-        prev_hash = self.last_hash()
-        digest = compute_hash(
-            seq=seq,
-            prev_hash=prev_hash,
-            record_type=record_type,
-            recorded_at=recorded_at,
-            body=body,
-        )
         recorded_iso = recorded_at.isoformat()
         body_json = canonical_json(body)
         try:
-            self._conn.execute("BEGIN")
+            self._conn.execute("BEGIN IMMEDIATE")
+            seq = self.last_seq() + 1
+            prev_hash = self.last_hash()
+            digest = compute_hash(
+                seq=seq,
+                prev_hash=prev_hash,
+                record_type=record_type,
+                recorded_at=recorded_at,
+                body=body,
+            )
             self._conn.execute(
                 """
                 INSERT INTO ledger (seq, prev_hash, record_type, recorded_at, body_json, hash)
@@ -127,10 +132,12 @@ class Ledger:
                     (gate_id, seq, deadline_at.isoformat(), action_id),
                 )
             elif record_type in {"decision", "timeout"} and gate_id and gate_status:
-                self._conn.execute(
-                    "UPDATE gate_index SET status = ? WHERE gate_id = ?",
+                cur = self._conn.execute(
+                    "UPDATE gate_index SET status = ? WHERE gate_id = ? AND status = 'pending'",
                     (gate_status, gate_id),
                 )
+                if cur.rowcount != 1:
+                    raise LedgerConflict(f"gate {gate_id} is no longer pending")
             self._conn.commit()
         except Exception:
             self._conn.rollback()

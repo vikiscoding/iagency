@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from iagency.brief import render_brief
-from iagency.ledger import Ledger
+from iagency.ledger import Ledger, LedgerConflict
 from iagency.policy import evaluate
 from iagency.types import (
     Brief,
@@ -124,17 +124,20 @@ def expire_if_due(ledger: Ledger, gate_id: str, *, clock: Clock = _now_utc) -> R
         return None
     if now <= opened.deadline_at:
         return None
-    rec = ledger.append(
-        "timeout",
-        {
-            "gate_id": gate_id,
-            "action_id": opened.action.action_id,
-            "default": opened.verdict.default_on_timeout,
-        },
-        now,
-        gate_id=gate_id,
-        gate_status="expired",
-    )
+    try:
+        rec = ledger.append(
+            "timeout",
+            {
+                "gate_id": gate_id,
+                "action_id": opened.action.action_id,
+                "default": opened.verdict.default_on_timeout,
+            },
+            now,
+            gate_id=gate_id,
+            gate_status="expired",
+        )
+    except LedgerConflict:
+        return None
     return ResumeToken(
         action_id=opened.action.action_id,
         gate_id=gate_id,
@@ -189,13 +192,16 @@ def decide(
         brief_hash=opened.brief_hash,
         request_hash=opened.request_hash,
     )
-    rec = ledger.append(
-        "decision",
-        decision.model_dump(mode="json"),
-        now,
-        gate_id=gate_id,
-        gate_status="decided",
-    )
+    try:
+        rec = ledger.append(
+            "decision",
+            decision.model_dump(mode="json"),
+            now,
+            gate_id=gate_id,
+            gate_status="decided",
+        )
+    except LedgerConflict as e:
+        raise ValueError(f"gate {gate_id} is no longer pending") from e
     return ResumeToken(
         action_id=opened.action.action_id,
         gate_id=gate_id,
@@ -244,6 +250,16 @@ def resume(ledger: Ledger, gate_id: str, *, clock: Clock = _now_utc) -> ResumeTo
         ledger_hash=ledger.last_hash(),
         policy_version=opened.verdict.policy_version,
     )
+
+
+def expire_pending(ledger: Ledger, *, clock: Clock = _now_utc) -> list[ResumeToken]:
+    """Apply timeout to every due pending gate. Safe to call from list views."""
+    expired: list[ResumeToken] = []
+    for gate_id, _action_id, _deadline in list(ledger.pending_gates()):
+        token = expire_if_due(ledger, gate_id, clock=clock)
+        if token is not None:
+            expired.append(token)
+    return expired
 
 
 def brief_for(ledger: Ledger, gate_id: str) -> Brief:

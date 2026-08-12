@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from iagency.ledger import GENESIS_HASH, Ledger, compute_hash
+from iagency.ledger import GENESIS_HASH, Ledger, LedgerConflict, compute_hash
 
 
 def test_empty_chain_verifies(tmp_path) -> None:
@@ -58,3 +58,35 @@ def test_hash_function_is_stable() -> None:
     )
     assert a == b
     assert a != c
+
+
+def test_second_close_of_gate_conflicts(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "l.sqlite")
+    now = datetime(2026, 8, 12, tzinfo=UTC)
+    ledger.append(
+        "gate_opened",
+        {"gate_id": "g1"},
+        now,
+        gate_id="g1",
+        action_id="a1",
+        deadline_at=now,
+    )
+    ledger.append(
+        "decision",
+        {"gate_id": "g1", "choice_id": "approve"},
+        now,
+        gate_id="g1",
+        gate_status="decided",
+    )
+    with pytest.raises(LedgerConflict, match="no longer pending"):
+        ledger.append(
+            "decision",
+            {"gate_id": "g1", "choice_id": "reject"},
+            now,
+            gate_id="g1",
+            gate_status="decided",
+        )
+    ledger.verify()
+    types = [r.record_type for r in ledger.records()]
+    assert types == ["gate_opened", "decision"]
+    ledger.close()

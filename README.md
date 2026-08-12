@@ -69,7 +69,7 @@ Open `http://127.0.0.1:8080`. Submit a `ProposedAction` JSON document, then reco
 | `IAGENCY_BRIEF_TIMEOUT` | Seconds, default `8` |
 | `IAGENCY_LEDGER` | SQLite path, default `data/ledger.sqlite` |
 
-Keep keys in a git-ignored `.env` or the process environment. Never commit them.
+Set `XAI_API_KEY` in the process environment (`$env:XAI_API_KEY = "..."` in PowerShell). A `.env` file is git-ignored and is **not** loaded automatically. Never commit keys.
 
 | Example | Policy result |
 |---------|----------------|
