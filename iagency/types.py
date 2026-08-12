@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.2.0"
 MAX_PARAMS_BYTES = 8 * 1024
 MAX_CONTEXT_BYTES = 16 * 1024
 BRIEF_CHAR_BUDGET = 1500
@@ -53,7 +53,7 @@ class Actor(BaseModel):
 class HumanIdentity(BaseModel):
     id: str = Field(..., min_length=1, max_length=128)
     display_name: str = Field(..., min_length=1, max_length=128)
-    channel: Literal["cli"] = "cli"
+    channel: Literal["cli", "web"] = "cli"
 
 
 class Money(BaseModel):
@@ -133,7 +133,8 @@ class Brief(BaseModel):
     why_human: list[str] = Field(..., min_length=1, max_length=6)
     choices: list[Choice] = Field(..., min_length=1)
     tradeoffs: list[str] = Field(default_factory=list, max_length=3)
-    recommendation: str | None = None
+    recommendation: str | None = Field(default=None, max_length=200)
+    recommended_choice_id: str | None = None
     deeper_refs: list[str] = Field(default_factory=list, max_length=5)
     generator: Literal["template", "llm"] = "template"
     schema_version: str = SCHEMA_VERSION
@@ -151,6 +152,10 @@ class Brief(BaseModel):
         if self.tradeoffs:
             lines.append("Tradeoffs:")
             lines.extend(f"  - {t}" for t in self.tradeoffs)
+        if self.recommendation:
+            lines.append(f"Recommendation: {self.recommendation}")
+        if self.recommended_choice_id:
+            lines.append(f"Suggested choice: {self.recommended_choice_id}")
         if self.deeper_refs:
             lines.append("Deeper: " + "; ".join(self.deeper_refs))
         return "\n".join(lines)

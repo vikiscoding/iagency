@@ -23,7 +23,9 @@ def test_importing_spine_loads_no_llm_sdk() -> None:
     import iagency.ledger  # noqa: F401
     import iagency.loop  # noqa: F401
     import iagency.policy  # noqa: F401
+    import iagency.web  # noqa: F401
 
     loaded = set(sys.modules) - before
     hits = {name for name in loaded if name.split(".")[0] in BANNED}
     assert not hits, f"LLM SDK leaked onto the spine: {hits}"
+    assert "iagency.brief_llm" not in loaded

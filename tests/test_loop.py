@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from iagency.brief import render_brief
 from iagency.ledger import Ledger
 from iagency.loop import decide, resume, submit
 from iagency.types import Actor, HumanIdentity, Money, ProposedAction
@@ -79,6 +80,34 @@ def test_full_human_loop_approve(tmp_path) -> None:
     ledger.verify()
     types = [r.record_type for r in ledger.records()]
     assert types == ["gate_opened", "decision"]
+    ledger.close()
+
+
+def test_override_of_recommendation_is_recorded(tmp_path) -> None:
+    def renderer(gate_id, action, verdict):
+        brief = render_brief(gate_id, action, verdict)
+        return brief.model_copy(update={"recommended_choice_id": "approve"})
+
+    ledger = Ledger(tmp_path / "l.sqlite")
+    pending = submit(
+        ledger,
+        _action(environment="prod", verb="deploy"),
+        clock=_clock(NOW),
+        renderer=renderer,
+    )
+    decide(
+        ledger,
+        gate_id=pending.gate_id,
+        choice_id="reject",
+        rationale_codes=["risk_too_high"],
+        rationale_text="Recommendation declined.",
+        confidence="high",
+        actor=_human(),
+        clock=_clock(NOW + timedelta(seconds=2)),
+    )
+    recorded = ledger.decision_for(pending.gate_id)
+    assert recorded is not None
+    assert recorded.overrides_recommendation is True
     ledger.close()
 
 

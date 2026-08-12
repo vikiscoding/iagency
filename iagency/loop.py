@@ -1,4 +1,8 @@
-"""The critical path. Policy → brief → ledger → resume. No LLM."""
+"""The critical path. Policy → brief → ledger → resume.
+
+The default renderer is the template. Callers may inject a Layer B compressor.
+This module must not import brief_llm.
+"""
 
 from __future__ import annotations
 
@@ -15,12 +19,14 @@ from iagency.types import (
     Decision,
     GateOpened,
     HumanIdentity,
+    PolicyVerdict,
     ProposedAction,
     ResumeToken,
     canonical_json,
 )
 
 Clock = Callable[[], datetime]
+BriefRenderer = Callable[[str, ProposedAction, PolicyVerdict], Brief]
 
 
 def _now_utc() -> datetime:
@@ -31,7 +37,13 @@ def _sha(obj: object) -> str:
     return hashlib.sha256(canonical_json(obj).encode("utf-8")).hexdigest()
 
 
-def submit(ledger: Ledger, action: ProposedAction, *, clock: Clock = _now_utc) -> ResumeToken:
+def submit(
+    ledger: Ledger,
+    action: ProposedAction,
+    *,
+    clock: Clock = _now_utc,
+    renderer: BriefRenderer | None = None,
+) -> ResumeToken:
     verdict = evaluate(action)
     now = clock()
 
@@ -70,7 +82,8 @@ def submit(ledger: Ledger, action: ProposedAction, *, clock: Clock = _now_utc) -
         )
 
     gate_id = uuid.uuid4().hex
-    brief = render_brief(gate_id, action, verdict)
+    render = renderer or render_brief
+    brief = render(gate_id, action, verdict)
     deadline_at = now + timedelta(seconds=verdict.deadline_seconds)
     request_hash = _sha({"action": action, "verdict": verdict})
     brief_hash = _sha(brief)
@@ -167,7 +180,10 @@ def decide(
         rationale_codes=rationale_codes,
         rationale_text=rationale_text,
         confidence=confidence,  # type: ignore[arg-type]
-        overrides_recommendation=False,
+        overrides_recommendation=(
+            opened.brief.recommended_choice_id is not None
+            and opened.brief.recommended_choice_id != choice_id
+        ),
         actor=actor,
         decided_at=now,
         brief_hash=opened.brief_hash,

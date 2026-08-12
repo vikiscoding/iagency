@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|--------|
-| Status | Locked for Phase 0 |
+| Status | Phase 0 locked on `prod`. Phase 1 current on `dev`. |
 | Date | 2026-08-12 |
 | Audience | Implementers (primarily automated agents) and reviewers |
 | Related | `README.md` (operations), `AGENTS.md` (change protocol) |
@@ -33,7 +33,7 @@ Three layers with hard boundaries.
 | Layer | Name | Determinism | LLM allowed |
 |-------|------|-------------|-------------|
 | A | Gate trigger and policy | Required | No |
-| B | Predicament brief | Phase 0: required. Phase 1: one constrained call | Phase 1 only, same `Brief` schema |
+| B | Predicament brief | Template required. One optional constrained call | Yes, one call, same `Brief` schema, template fallback |
 | C | Decision capture and ledger | Required | No |
 
 ```
@@ -47,8 +47,8 @@ Layer A  policy.evaluate()          # pure, versioned, no LLM
     └─ gate   ──► ledger.append(gate_opened)
                       │
                       ▼
-                 Layer B  render_brief()     # Phase 0: template
-                      │                      # Phase 1: one LLM call, same schema
+                 Layer B  render_brief()     # template (always available)
+                      │                      # optional: one HTTP call, same schema
                       ▼
                  human is shown the brief
                       │
@@ -118,7 +118,7 @@ Policy emits this list. The brief copies it. The decision must reference one of 
 - `reasons` — `{code, fact}` pairs. Never model-generated prose.
 - `choices` — empty unless `decision == gate`
 - `deadline_seconds`
-- `default_on_timeout` — `halt` in Phase 0
+- `default_on_timeout` — `halt`
 
 ### Brief (Layer B output)
 
@@ -130,10 +130,11 @@ Policy emits this list. The brief copies it. The decision must reference one of 
 | `why_human` | Verdict reasons, restated at most |
 | `choices` | Copied from the verdict. Never invented |
 | `tradeoffs` | Optional, ≤ 3 lines |
-| `recommendation` | `None` in Phase 0 |
+| `recommendation` | Optional, ≤ 200 characters |
+| `recommended_choice_id` | One of the opened choice ids, or null |
 | `deeper_refs` | Pointers, not a dump of `raw_context` |
 | `generator` | `template \| llm` |
-| `schema_version` | Current brief schema |
+| `schema_version` | `0.2.0` |
 
 Rendered length must stay under 1,500 characters. If a fixture exceeds this, the renderer failed.
 
@@ -144,8 +145,8 @@ Rendered length must stay under 1,500 characters. If a fixture exceeds this, the
 - `rationale_codes` — closed set
 - `rationale_text` — ≤ 500 characters
 - `confidence` — `low | medium | high`
-- `overrides_recommendation` — `false` in Phase 0
-- `actor` — human identity (Phase 0: id, display name, channel `cli`)
+- `overrides_recommendation` — true when `recommended_choice_id` is set and the human picked another choice
+- `actor` — human identity (id, display name, channel `cli` or `web`)
 - `decided_at`
 - `brief_hash`, `request_hash` — what was shown, what was asked
 
@@ -204,11 +205,11 @@ Do not introduce a rule DSL or external rules file in Phase 0. Five predicates a
 
 ### Layer B — Brief
 
-**Phase 0:** Deterministic template. Same action + verdict → same brief except `gate_id`.
+**Template (always):** Deterministic. Same action + verdict → same brief except `gate_id`. This is the fallback and the source of `choices` and `why_human`.
 
-**Phase 1:** One schema-constrained model call. Low temperature. Output parsed into the same `Brief` type. On parse failure, fall back to the template and set `generator=template`. The human still decides. A failed model call must not halt the gate.
+**Optional compressor (Phase 1):** One schema-constrained HTTP call to SpaceXAI (`https://api.x.ai/v1`, model `grok-4.6` by default). Temperature 0. Output parsed into a fill object, then merged onto the template. On any failure (missing key, timeout, parse error, budget breach), return the template with `generator=template`. A failed model call must not halt the gate.
 
-The model may fill `proposed`, `tradeoffs`, and `recommendation`. It must not add, remove, or rewrite `choices`. It must not change `why_human` reason codes.
+The model may fill `proposed`, `tradeoffs`, `recommendation`, and `recommended_choice_id`. It must not add, remove, or rewrite `choices`. It must not change `why_human` reason codes. An illegal `recommended_choice_id` is dropped.
 
 ### Layer C — Ledger and capture
 
@@ -222,12 +223,15 @@ Identity, authorization, routing, hashing, and serialization are code. Model out
 
 Future implementation is expected to be mostly automated. That does not move the model onto the critical path.
 
-**Allowed later (not in Phase 0):**
+**Allowed on Layer B only:**
 
 - Compress `raw_context` into `proposed` and `tradeoffs`.
 - Produce a recommendation the human can override.
-- Offline: cluster past `rationale_codes` to propose better codes.
-- Offline: propose *candidate* policy predicates. A human versions accepted predicates into Layer A.
+
+**Allowed later, offline only:**
+
+- Cluster past `rationale_codes` to propose better codes.
+- Propose *candidate* policy predicates. A human versions accepted predicates into Layer A.
 
 **Forbidden on the critical path:**
 
@@ -242,45 +246,39 @@ If a step’s nondeterminism would prevent answering “what happened?” from t
 
 ---
 
-## 7. Phase 0 scope
+## 7. Phase scope
 
-Phase 0 proves that a human (or a test acting as one) can:
+**Phase 0 (locked on `prod`)** proved the spine: submit → allow/block/gate → structured decision → hash chain → resume. No model. CLI only.
 
-1. Submit a proposed action.
-2. Receive allow, block, or a pending gate with a short brief.
-3. Decide with a structured form.
-4. Leave an immutable, hash-chained record.
-5. Receive a resume token.
-6. Verify the entire chain with no network and no model.
+**Phase 1 (current on `dev`)** adds:
 
-**Out of scope**
+1. One optional compressor in `brief_llm.py` (stdlib HTTP, no SDK). Template fallback is mandatory.
+2. One additional human channel: a single localhost web UI (`iagency serve`). Not Slack.
 
-- Slack, Teams, web UI
+Policy predicates are unchanged. The ledger is unchanged.
+
+**Out of scope (still)**
+
+- Slack, Teams
 - Postgres, object storage, queues
 - SSO, signatures, multi-party approval, escalation
-- LLM brief generator
 - Outcome linking, learning loops, external ITSM or agent-framework adapters
 - Dashboards
 
-**Complexity budget**
+**Complexity budget (Phase 1)**
 
 | Metric | Budget |
 |--------|--------|
-| Production modules | `types`, `policy`, `brief`, `ledger`, `loop`, `cli` |
+| Production modules | `types`, `policy`, `brief`, `brief_llm`, `render`, `ledger`, `loop`, `cli`, `web` |
 | LLM SDKs imported | 0 |
-| Network required to run tests | 0 |
-| Human-channel implementations | 1 (`cli`) |
+| Network required to run tests | 0 (model calls are mocked or skipped) |
+| Human-channel implementations | 2 (`cli`, `web`) |
 
-The critical path must remain small enough that an implementer can hold it in context without additional abstraction layers.
+`policy.py` and `ledger.py` must remain importable with `XAI_API_KEY` unset and with `brief_llm.py` deleted.
 
 ---
 
 ## 8. Later phases
-
-Start a later phase only when Phase 0 has been used on a real proposed action and the measured bottleneck is the brief or an adapter, not the ledger.
-
-**Phase 1 — one compression step**  
-Same `Brief` schema, filled by one constrained model call, template fallback. One additional human channel (Slack *or* a single web page, not both). Policy remains the Phase 0 predicates unless fixtures justify a versioned predicate change.
 
 **Phase 2 — production attachments**  
 SSO identity mapped onto `Decision.actor`. Ed25519 signatures on records. Multi-party / escalation / custom deadlines. HTTP API and webhook resume. Postgres adapter behind the same ledger interface. Replay and query that only read the chain.

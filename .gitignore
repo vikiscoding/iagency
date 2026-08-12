@@ -9,3 +9,4 @@ build/
 data/
 *.sqlite
 .DS_Store
+.env

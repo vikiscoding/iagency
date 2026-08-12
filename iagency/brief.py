@@ -1,4 +1,8 @@
-"""Layer B — predicament brief. Phase 0 is a template. No LLM."""
+"""Layer B — predicament brief template.
+
+The template is the fallback and the source of choices / reason codes.
+A model may only fill proposed, tradeoffs, and recommendation via brief_llm.
+"""
 
 from __future__ import annotations
 

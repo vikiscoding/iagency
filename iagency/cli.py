@@ -1,4 +1,4 @@
-"""CLI human channel for Phase 0. Adapters (Slack, web) come later."""
+"""CLI human channel. Web serve is the Phase 1 adapter."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 
 from iagency.ledger import Ledger
 from iagency.loop import brief_for, decide, resume, submit
+from iagency.render import resolve_renderer
 from iagency.types import RATIONALE_CODES, HumanIdentity, ProposedAction
 
 DEFAULT_DB = Path(os.environ.get("IAGENCY_LEDGER", "data/ledger.sqlite"))
@@ -23,7 +24,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     payload = json.loads(Path(args.action).read_text(encoding="utf-8"))
     action = ProposedAction.model_validate(payload)
     ledger = _ledger(args.db)
-    token = submit(ledger, action)
+    token = submit(ledger, action, renderer=resolve_renderer(args.brief))
     if token.status == "pending" and token.gate_id:
         brief = brief_for(ledger, token.gate_id)
         print(brief.render())
@@ -92,6 +93,25 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    from iagency.web import serve
+
+    server = serve(
+        args.db,
+        host=args.host,
+        port=args.port,
+        renderer=resolve_renderer(args.brief),
+    )
+    print(f"iagency web on http://{args.host}:{args.port}  db={args.db}", file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("stopping", file=sys.stderr)
+    finally:
+        server.server_close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="iagency", description="Human-gate spine")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -99,8 +119,17 @@ def build_parser() -> argparse.ArgumentParser:
     def add_db(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--db", type=Path, default=DEFAULT_DB, help="sqlite ledger path")
 
+    def add_brief(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument(
+            "--brief",
+            default=None,
+            choices=("auto", "template", "llm"),
+            help="brief renderer (default: IAGENCY_BRIEF or auto)",
+        )
+
     s = sub.add_parser("submit", help="submit a proposed action JSON file")
     add_db(s)
+    add_brief(s)
     s.add_argument("action", type=Path)
     s.set_defaults(func=cmd_submit)
 
@@ -131,6 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("verify", help="recompute the hash chain")
     add_db(s)
     s.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("serve", help="single web human channel")
+    add_db(s)
+    add_brief(s)
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8080)
+    s.set_defaults(func=cmd_serve)
     return p
 
 
