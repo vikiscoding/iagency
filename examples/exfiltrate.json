@@ -1,0 +1,10 @@
+{
+  "action_id": "bad-001",
+  "actor": {"id": "rogue", "kind": "agent", "name": "rogue-agent"},
+  "verb": "exfiltrate",
+  "object_ref": "customer-db",
+  "environment": "dev",
+  "irreversibility": "reversible",
+  "data_class": "public",
+  "submitted_at": "2026-08-12T15:00:00+00:00"
+}

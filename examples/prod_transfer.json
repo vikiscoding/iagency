@@ -1,0 +1,17 @@
+{
+  "action_id": "wire-2026-08-12-001",
+  "actor": {"id": "treasury-agent", "kind": "agent", "name": "treasury-agent"},
+  "verb": "transfer",
+  "object_ref": "acct-4419",
+  "params": {"to": "vendor-88", "cents": 250000},
+  "environment": "prod",
+  "irreversibility": "costly",
+  "estimated_cost": {"cents": 250000, "currency": "USD"},
+  "data_class": "sensitive",
+  "raw_context": {
+    "invoice": "INV-4419",
+    "dual_control_already": false,
+    "vendor_on_allowlist": true
+  },
+  "submitted_at": "2026-08-12T15:00:00+00:00"
+}

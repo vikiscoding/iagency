@@ -1,0 +1,11 @@
+{
+  "action_id": "log-2026-08-12-001",
+  "actor": {"id": "notes-bot", "kind": "agent", "name": "notes-bot"},
+  "verb": "write_log",
+  "object_ref": "app.log",
+  "params": {"line": "heartbeat"},
+  "environment": "dev",
+  "irreversibility": "reversible",
+  "data_class": "internal",
+  "submitted_at": "2026-08-12T15:00:00+00:00"
+}
